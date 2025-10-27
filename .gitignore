@@ -1,6 +1,10 @@
 # CSV files
 *.csv
 
+# Large data files
+*.pkl
+pheno_data.pkl
+
 # Python cache
 __pycache__/
 *.py[cod]
