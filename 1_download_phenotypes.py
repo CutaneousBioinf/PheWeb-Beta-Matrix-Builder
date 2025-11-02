@@ -1,8 +1,9 @@
-#!/usr/bin/env python3
 """
 Step 1: Download phenotype summary statistics from PheWeb
 Saves data to pickle files for later processing
 """
+
+# Tested with MGI-BioVU PheWeb instance (~69 phenotypes, ~6 min download time) to create analysis-ready matrices for polygenic risk scoring and cross-trait genetic correlation studies.
 import requests
 import pandas as pd
 import gzip
@@ -49,17 +50,33 @@ def download_phenotype(pheno):
         # Filter to only rows with rsID
         rsid_col = 'rsids' if 'rsids' in df.columns else 'rsid' if 'rsid' in df.columns else None
         if rsid_col:
+            # drop rows that have missing RSID values
             df = df[df[rsid_col].notna() & (df[rsid_col] != '')]
             df = df.rename(columns={rsid_col: 'rsid'})  # Standardize column name
 
             # Remove duplicates early
             df = df.drop_duplicates(subset='rsid', keep='first')
 
-            # Keep only necessary columns
-            df = df[['rsid', 'ref', 'alt', 'beta']]
+            # Keep only necessary columns (including pval for significance thresholding)
+            # Check for p-value column variants
+            pval_col = None
+            for col_name in ['pval', 'p_value', 'p', 'P', 'pvalue']:
+                if col_name in df.columns:
+                    pval_col = col_name
+                    break
+
+            if pval_col:
+                df = df[['rsid', 'ref', 'alt', 'beta', pval_col]]
+                df = df.rename(columns={pval_col: 'pval'})
+            else:
+                print(f"  -> Warning: No p-value column found in {pheno}, using only beta")
+                df = df[['rsid', 'ref', 'alt', 'beta']]
+                df['pval'] = None  # Add empty pval column
+
             df['phenotype'] = pheno
 
             return pheno, df, len(df)
+        # if RSID column itself is missing
         else:
             return pheno, None, 0
 
@@ -95,4 +112,4 @@ with open('pheno_data.pkl', 'wb') as f:
     pickle.dump(pheno_data, f)
 
 print(f"Successfully downloaded and saved {len(pheno_data)} phenotypes")
-print(f"Run 2_build_matrix.py to create the beta matrix")
+print(f"Run 2_build_matrix.py to create the beta matrix (with p<5e-5 filtering)")

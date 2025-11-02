@@ -1,34 +1,34 @@
 # PheWeb Beta Matrix Builder Explanation
 
 ## What this script is for
-It bulk-downloads GWAS summary stats for many phenotypes from a PheWeb site, keeps only variants that have an rsID, and builds a single **beta matrix** (rows = rsIDs, columns = phenotypes). It also fixes sign flips when the reference/alternate alleles are swapped across phenotypes.
+It bulk-downloads GWAS summary stats for many phenotypes from a PheWeb site, keeps only variants that have an rsID, and builds a single **beta matrix** (rows = rsIDs, columns = phenotypes). It also fixes sign flips when the reference/alternate alleles are swapped across phenotypes. Additionally, it filters variants by p-value (p < 5e-5) to include only significant associations.
 
 ---
 
 ## Step-by-step walk-through
 
-### 1) Choose which PheWeb to crawl  
+### 1) Choose which PheWeb to crawl
 ```python
 PHEWEB_BASE = "https://pheweb.org/MGI-BioVU"
 ```
 - This base URL points to a specific PheWeb instance. All API and download URLs are built from this.
 
-### 2) Get the list of phenotypes from the API  
+### 2) Get the list of phenotypes from the API
 ```python
 requests.get(f"{PHEWEB_BASE}/api/phenotypes.json", timeout=30)
 phenotypes = [p['phenocode'] for p in response.json()]
 ```
 - Calls the PheWeb API to retrieve metadata for all phenotypes.
-- Extracts each phenotype’s **phenocode** (its identifier).
+- Extracts each phenotype's **phenocode** (its identifier).
 - If anything goes wrong (network error, non-200 status), it logs the error and exits.
 
-### 3) Prepare the per-phenotype download URL pattern  
+### 3) Prepare the per-phenotype download URL pattern
 ```python
 base_url = f"{PHEWEB_BASE}/download/"
 ```
-- Each phenotype’s summary stats will be at `.../download/<phenocode>` (often returns a gzipped TSV).
+- Each phenotype's summary stats will be at `.../download/<phenocode>` (often returns a gzipped TSV).
 
-### 4) Define how to download and clean **one** phenotype  
+### 4) Define how to download and clean **one** phenotype
 ```python
 def download_phenotype(pheno):
     url = f"{base_url}{pheno}"
@@ -43,14 +43,15 @@ Inside this function it:
 
 Then it:
 - Figures out which column carries rsIDs (`'rsids'` or `'rsid'`), and standardizes it to `'rsid'`.
+- Figures out which column carries p-values (`'pval'`, `'p_value'`, `'p'`, `'P'`, `'pvalue'`), and standardizes it to `'pval'`.
 - Drops rows with missing/empty rsIDs.
 - Drops duplicate rsIDs (keeps the first occurrence).
-- Keeps only the columns it needs: `rsid`, `ref`, `alt`, `beta`.
+- Keeps only the columns it needs: `rsid`, `ref`, `alt`, `beta`, `pval`.
 - Adds a `phenotype` column for bookkeeping.
 - Returns `(phenocode, cleaned_dataframe, number_of_rows_kept)`.
 - On any error, returns `(phenocode, None, 0)`.
 
-### 5) Download **all** phenotypes in parallel  
+### 5) Download **all** phenotypes in parallel
 ```python
 with ThreadPoolExecutor(max_workers=10) as executor:
     futures = {executor.submit(download_phenotype, ph): ph for ph in phenotypes}
@@ -62,7 +63,7 @@ with ThreadPoolExecutor(max_workers=10) as executor:
 - Successful DataFrames are collected into `pheno_data = {phenocode: df, ...}`.
 - If **none** succeeded, it exits.
 
-### 6) Find the **intersection** of rsIDs across all phenotypes  
+### 6) Find the **intersection** of rsIDs across all phenotypes
 ```python
 common_rsids = set(first_df['rsid'])
 for pheno in pheno_data:
@@ -72,65 +73,68 @@ for pheno in pheno_data:
 - Result: only rsIDs present in **every** phenotype remain.
 - This ensures the final matrix has no missing rows for any phenotype (dense matrix).
 
-### 7) Build a reference table for allele orientation  
+### 7) Build a reference table for allele orientation
 ```python
 ref_pheno = first_phenotype
-ref_df = pheno_data[ref_pheno][rsid in common_rsids].set_index('rsid')[['ref','alt','beta']]
-ref_df.columns = ['ref_ref','ref_alt', ref_pheno]
-beta_matrix = ref_df[[ref_pheno]].copy()
+ref_df = pheno_data[ref_pheno][rsid in common_rsids].set_index('rsid')[['ref','alt','beta','pval']]
+ref_df.columns = ['ref_ref','ref_alt', ref_pheno+'_beta', ref_pheno+'_pval']
+beta_matrix = ref_df[[ref_pheno+'_beta']].copy()
 ```
 - Chooses the first phenotype as the **reference** for allele orientation.
 - Renames its allele columns to `ref_ref` and `ref_alt` to avoid confusion later.
-- Seeds the beta matrix with the reference phenotype’s beta values.
+- Seeds the beta matrix with the reference phenotype's beta values.
+- Applies p-value filter (p < 5e-5) to reference phenotype.
 
-### 8) For each other phenotype: align alleles and fix sign flips  
+### 8) For each other phenotype: align alleles and fix sign flips
 For each phenotype:
 - Select only common rsIDs and set index to `rsid`.
-- Join with the reference’s `ref_ref/ref_alt`.
-- Compare alleles row-wise:  
+- Join with the reference's `ref_ref/ref_alt`.
+- Compare alleles row-wise:
   ```python
   alleles_match   = (ref == ref_ref) & (alt == ref_alt)
   alleles_flipped = (ref == ref_alt) & (alt == ref_ref)
   ```
-- If **match**, keep `beta` as-is.  
-- If **flipped**, **negate** `beta` (because swapping ref/alt flips the effect direction).  
+- If **match**, keep `beta` as-is.
+- If **flipped**, **negate** `beta` (because swapping ref/alt flips the effect direction).
 - If neither (mismatch e.g., strand issues, multi-allelic quirks), set to `None` (i.e., NA).
+- **Apply p-value filter**: Set to `None` if p ≥ 5e-5.
 - Count and log how many were flipped and how many were mismatches.
-- Append this phenotype’s aligned beta column to `beta_matrix`.
+- Append this phenotype's aligned beta column to `beta_matrix`.
 
-**Why this matters:** GWAS effects depend on which allele you call “reference.” If two files disagree on ref/alt, the sign of beta must be flipped to make them comparable. This block enforces consistent orientation across phenotypes.
+**Why this matters:** GWAS effects depend on which allele you call "reference." If two files disagree on ref/alt, the sign of beta must be flipped to make them comparable. This block enforces consistent orientation across phenotypes. P-value filtering ensures only significant associations (p < 5e-5) are included in the matrix.
 
-### 9) Report size of the final matrix  
+### 9) Report size of the final matrix
 ```python
 print(f"Created beta matrix with {len(beta_matrix)} rsIDs and {len(beta_matrix.columns)} phenotypes")
 ```
 - Rows = number of common rsIDs.
 - Columns = number of phenotypes (including the reference).
 
-### 10) Save results and print a summary  
+### 10) Save results and print a summary
 ```python
-beta_matrix.to_csv("beta_matrix.csv", sep='\t')
+beta_matrix.to_csv("(time_stamp).csv")
 print("Summary: ...")
 ```
-- Writes out a tab-separated file you can load later for downstream modeling.
-- Prints totals (phenotypes included, row count, and flip statistics).
+- Writes out a CSV file you can load later for downstream modeling.
+- Prints totals (phenotypes included, row count, flip statistics, and significant associations per phenotype).
 
 ---
 
 ## Pre-reqs
 - Python libs: `requests`, `gzip`, `io`, `pandas`, `concurrent.futures`, `sys` (all implied by the code).
-- The PheWeb instance must expose `/api/phenotypes.json` and `/download/<phenocode>` endpoints with TSV (plain or gzipped) containing at least: `rsid/rsids`, `ref`, `alt`, `beta`.
+- The PheWeb instance must expose `/api/phenotypes.json` and `/download/<phenocode>` endpoints with TSV (plain or gzipped) containing at least: `rsid/rsids`, `ref`, `alt`, `beta`, and `pval` (or similar p-value column).
 
 ---
 
 ## Practical notes
+- **P-value threshold:** Currently set to p < 5e-5. To change, edit `PVAL_THRESHOLD` in `2_build_matrix.py:30`.
 - **Intersection can be small:** Requiring presence in *all* phenotypes can drastically shrink the row set. If you want more rows, consider a threshold (e.g., rsIDs present in ≥K phenotypes) and then handle missing values.
 - **Allele mismatches:** Rows where alleles are neither match nor flip become NA. That can happen due to strand issues (A/T or C/G SNPs) or differing variant normalization. If you care, add explicit strand handling or liftover/normalization.
 - **Duplicates:** The script keeps the first occurrence of a duplicate rsID per phenotype; if there are multiple lines per rsID (e.g., multi-allelic sites), you may want to pre-aggregate or choose by lowest p-value, etc.
 - **Performance:** Parallel downloads help. If the instance is rate-limited, reduce `max_workers`.
-- **Schema changes:** If a PheWeb instance uses different column names, the `rsid` detection or `['ref','alt','beta']` selection may need tweaking.
+- **Schema changes:** If a PheWeb instance uses different column names, the `rsid` and `pval` detection logic may need tweaking.
 
 ---
 
 ## Output artifact
-- `beta_matrix.csv` — a dense matrix of aligned, sign-consistent betas for the set of rsIDs shared by every successfully downloaded phenotype.
+- `(time_stamp).csv` — a dense matrix of aligned, sign-consistent betas for the set of rsIDs shared by every successfully downloaded phenotype. Only associations with p < 5e-5 are included (non-significant values are NaN).
