@@ -144,6 +144,12 @@ def plot_pca_3d(embeddings, labels, title, output_path, sample_size=None):
     scatter = ax.scatter(embeddings[:, 0], embeddings[:, 1], embeddings[:, 2],
                         alpha=0.6, s=50, edgecolors='k', linewidths=0.5)
 
+    # Label points (if not too many)
+    if len(embeddings) <= 100:
+        for i, label in enumerate(labels):
+            ax.text(embeddings[i, 0], embeddings[i, 1], embeddings[i, 2],
+                   label, fontsize=8, alpha=0.7)
+
     ax.set_xlabel('Component 1')
     ax.set_ylabel('Component 2')
     ax.set_zlabel('Component 3')
