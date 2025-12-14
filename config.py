@@ -54,11 +54,15 @@ DATASET_DIR = DATA_DIR / DATASET_NAME
 # Output file paths
 PHENO_DATA_PATH = DATASET_DIR / "pheno_data.pkl"
 EMBEDDINGS_DIR = DATASET_DIR / "embeddings"
+SIMILARITY_DIR = DATASET_DIR / "similarity_analysis"
+VISUALIZATION_DIR = DATASET_DIR / "visualizations"
 
 def setup_directories():
     """Create necessary directories if they don't exist"""
     DATASET_DIR.mkdir(parents=True, exist_ok=True)
     EMBEDDINGS_DIR.mkdir(parents=True, exist_ok=True)
+    SIMILARITY_DIR.mkdir(parents=True, exist_ok=True)
+    VISUALIZATION_DIR.mkdir(parents=True, exist_ok=True)
     print(f"Output directory: {DATASET_DIR.absolute()}")
 
 def get_matrix_path(timestamp):

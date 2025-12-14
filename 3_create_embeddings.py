@@ -12,6 +12,12 @@ SVD decomposition: X = U * S * V^T
   - V^T: Right embeddings (phenotype embeddings) - obtained via svd.components_.T
 """
 
+"""
+Note: Problem with the current approach (shown in visualizations) in this step 3.
+- So far, we plotted first two components that seems to have the most affect - but this leaves out a lot of information.
+- We try cosine similarity on the full embeddings in step 4 to capture more information.
+"""
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -26,7 +32,7 @@ from pathlib import Path
 # Import configuration
 from config import (
     DATASET_NAME, N_COMPONENTS, VARIANT_SAMPLE_SIZE,
-    DATASET_DIR, EMBEDDINGS_DIR, get_latest_matrix, setup_directories
+    DATASET_DIR, EMBEDDINGS_DIR, VISUALIZATION_DIR, get_latest_matrix, setup_directories
 )
 
 def load_matrix(filepath):
@@ -240,7 +246,7 @@ def plot_pca_3d(embeddings, labels, title, output_path, sample_size=None, is_var
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-def save_embeddings(left_emb, right_emb, variant_ids, phenotype_ids, output_dir, matrix_name):
+def save_embeddings(left_emb, right_emb, variant_ids, phenotype_ids, output_dir):
     """Save embeddings to CSV files"""
     print("\nSaving embeddings...")
 
@@ -248,15 +254,17 @@ def save_embeddings(left_emb, right_emb, variant_ids, phenotype_ids, output_dir,
     left_df = pd.DataFrame(left_emb,
                           index=variant_ids,
                           columns=[f'dim_{i}' for i in range(left_emb.shape[1])])
-    variant_path = output_dir / f'{matrix_name}_variant_embeddings.csv'
+    variant_path = output_dir / 'variant_embeddings.csv'
     left_df.to_csv(variant_path)
+    print(f"  Saved: {variant_path}")
 
     # Save phenotype embeddings
     right_df = pd.DataFrame(right_emb,
                            index=phenotype_ids,
                            columns=[f'dim_{i}' for i in range(right_emb.shape[1])])
-    pheno_path = output_dir / f'{matrix_name}_phenotype_embeddings.csv'
+    pheno_path = output_dir / 'phenotype_embeddings.csv'
     right_df.to_csv(pheno_path)
+    print(f"  Saved: {pheno_path}")
 
     return left_df, right_df
 
@@ -280,14 +288,8 @@ def main():
     for f in matrix_files:
         print(f"  - {f.name}")
 
-    print("\n" + "="*80)
-
     # Process each matrix
     for matrix_file in matrix_files:
-        print(f"\n{'='*80}")
-        print(f"Processing: {matrix_file.name}")
-        print(f"{'='*80}\n")
-
         matrix_name = matrix_file.stem
 
         # Load and prepare matrix
@@ -297,26 +299,25 @@ def main():
         # Perform SVD
         left_embeddings, right_embeddings, svd = perform_svd(X, N_COMPONENTS)
 
-        # Output prefix for this matrix
-        output_prefix = EMBEDDINGS_DIR / matrix_name
-
-        # Save embeddings
+        # Save embeddings to EMBEDDINGS_DIR
         left_df, right_df = save_embeddings(
             left_embeddings, right_embeddings,
             variant_ids, phenotype_ids,
-            EMBEDDINGS_DIR, matrix_name
+            EMBEDDINGS_DIR
         )
 
+        # Visualization output prefix (to VISUALIZATION_DIR)
+        viz_prefix = VISUALIZATION_DIR / matrix_name
+
         # Generate plots
-        print("\nCreating visualizations...")
-        plot_variance_explained(svd, str(output_prefix))
+        plot_variance_explained(svd, str(viz_prefix))
 
         # Variant embeddings (LEFT embeddings - U)
         # Create both regular and symlog versions for comparison
         plot_pca_2d(
             left_embeddings, variant_ids,
             f'Variant Embeddings - 2D ({DATASET_NAME})\nSVD Components 1 & 2 capture the two strongest hidden patterns',
-            f'{output_prefix}_variants_2d.png',
+            f'{viz_prefix}_variants_2d.png',
             sample_size=VARIANT_SAMPLE_SIZE,
             is_variant=True,
             use_symlog=False
@@ -325,7 +326,7 @@ def main():
         plot_pca_2d(
             left_embeddings, variant_ids,
             f'Variant Embeddings - 2D Symmetric Log Scale ({DATASET_NAME})\nLog scale reduces outlier influence while preserving negative values',
-            f'{output_prefix}_variants_2d_symlog.png',
+            f'{viz_prefix}_variants_2d_symlog.png',
             sample_size=VARIANT_SAMPLE_SIZE,
             is_variant=True,
             use_symlog=True
@@ -333,7 +334,7 @@ def main():
         plot_pca_3d(
             left_embeddings, variant_ids,
             f'Variant Embeddings - 3D ({DATASET_NAME})\nSVD Components 1, 2 & 3',
-            f'{output_prefix}_variants_3d.png',
+            f'{viz_prefix}_variants_3d.png',
             sample_size=VARIANT_SAMPLE_SIZE,
             is_variant=True
         )
@@ -342,7 +343,7 @@ def main():
         plot_pca_2d(
             right_embeddings, phenotype_ids,
             f'Phenotype Embeddings - 2D ({DATASET_NAME})\nCloser phenotypes have similar genetic variant associations',
-            f'{output_prefix}_phenotypes_2d.png',
+            f'{viz_prefix}_phenotypes_2d.png',
             sample_size=None,
             is_variant=False,
             use_symlog=False
@@ -350,14 +351,10 @@ def main():
         plot_pca_3d(
             right_embeddings, phenotype_ids,
             f'Phenotype Embeddings - 3D ({DATASET_NAME})\nCloser phenotypes have similar genetic variant associations',
-            f'{output_prefix}_phenotypes_3d.png',
+            f'{viz_prefix}_phenotypes_3d.png',
             sample_size=None,
             is_variant=False
         )
-
-        print(f"\n{'='*80}")
-        print(f"Completed processing: {matrix_file.name}")
-        print(f"{'='*80}\n")
 
     print("\n" + "="*80)
     print("All matrices processed successfully!")

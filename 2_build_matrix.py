@@ -34,7 +34,6 @@ print(f"P-value threshold: {PVAL_THRESHOLD}")
 print("=" * 60)
 
 # Load downloaded data
-print(f"Loading downloaded phenotype data from {PHENO_DATA_PATH}...")
 try:
     with open(PHENO_DATA_PATH, 'rb') as f:
         pheno_data = pickle.load(f)
